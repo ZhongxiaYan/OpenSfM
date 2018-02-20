@@ -40,7 +40,7 @@ flann_iterations: 10          # See OpenCV doc
 flann_checks: 200             # Smaller -> Faster (but might lose good matches)
 
 # Params for preemtive matching
-matching_gps_distance: 150            # Maximum gps distance between two images for matching
+matching_gps_distance: 75            # Maximum gps distance between two images for matching
 matching_gps_neighbors: 0             # Number of images to match selected by GPS distance. Set to 0 to use no limit
 matching_time_neighbors: 0            # Number of images to match selected by time taken. Set to 0 to use no limit
 preemptive_max: 200                   # Number of features to use for preemptive matching
@@ -75,7 +75,7 @@ bundle_outlier_threshold: 0.006
 save_partial_reconstructions: no
 
 # Params for GPS aligment
-use_altitude_tag: no                  # Use or ignore EXIF altitude tag
+use_altitude_tag: yes                  # Use or ignore EXIF altitude tag
 align_method: orientation_prior       # orientation_prior or naive
 align_orientation_prior: horizontal   # horizontal, vertical or no_roll
 
@@ -92,4 +92,4 @@ nav_vertical_threshold: 20            # Maximum vertical angle difference in mot
 nav_rotation_threshold: 30            # Maximum general rotation in degrees between cameras for steps
 
 # Other params
-processes: 10                  # Number of threads to use
+processes: 20                  # Number of threads to use

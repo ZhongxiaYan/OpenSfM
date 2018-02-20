@@ -34,7 +34,8 @@ class Command:
 
     def export(self, reconstruction, graph, data):
         lines = ['NVM_V3', '', str(len(reconstruction.shots))]
-        for shot in reconstruction.shots.values():
+        shots = reconstruction.shots.values()
+        for shot in shots:
             q = tf.quaternion_from_matrix(shot.pose.get_rotation_matrix())
             o = shot.pose.get_origin()
             words = [
@@ -45,7 +46,20 @@ class Command:
                 '0', '0',
             ]
             lines.append(' '.join(map(str, words)))
-        lines += ['0', '', '0', '', '0']
+        shot_ids_to_indices = { shot.id : i for i, shot in enumerate(shots) }
+        lines += [str(len(reconstruction.points))]
+        for point in reconstruction.points.values():
+            p, c = point.coordinates, point.color
+            fragments = [p[0], p[1], p[2], int(c[0]), int(c[1]), int(c[2]), len(graph[point.id])]
+            for shot_id in graph[point.id]:
+                exif = data.load_exif(shot_id)
+                view_id = shot_ids_to_indices[shot_id]
+                feature_id = graph[shot_id][point.id]['feature_id']
+                feature_x, feature_y = graph[shot_id][point.id]['feature']
+                feature_x, feature_y = exif['width'] * (0.5 + feature_x), exif['height'] * (0.5 + feature_y)
+                fragments.extend([view_id, feature_id, int(round(feature_x)), int(round(feature_y))])
+            lines.append(' '.join(map(str, fragments)))
+        lines += ['0']
 
         with io.open_wt(data.data_path + '/reconstruction.nvm') as fout:
             fout.write('\n'.join(lines))

@@ -53,7 +53,10 @@ class Command:
             fragments = [p[0], p[1], p[2], int(c[0]), int(c[1]), int(c[2]), len(graph[point.id])]
             for shot_id in graph[point.id]:
                 exif = data.load_exif(shot_id)
-                view_id = shot_ids_to_indices[shot_id]
+                try:
+                    view_id = shot_ids_to_indices[shot_id]
+                except:
+                    continue
                 feature_id = graph[shot_id][point.id]['feature_id']
                 feature_x, feature_y = graph[shot_id][point.id]['feature']
                 feature_x, feature_y = exif['width'] * (0.5 + feature_x), exif['height'] * (0.5 + feature_y)

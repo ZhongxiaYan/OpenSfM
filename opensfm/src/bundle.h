@@ -20,7 +20,8 @@ enum BACameraType {
   BA_PERSPECTIVE_CAMERA,
   BA_BROWN_PERSPECTIVE_CAMERA,
   BA_FISHEYE_CAMERA,
-  BA_EQUIRECTANGULAR_CAMERA
+  BA_EQUIRECTANGULAR_CAMERA,
+  BA_NONCENTRAL_CAMERA,
 };
 
 struct BACamera {
@@ -119,6 +120,44 @@ struct BAEquirectangularCamera : public BACamera {
 };
 
 enum {
+  BA_NONCENTRAL_CAMERA_RX,
+  BA_NONCENTRAL_CAMERA_RY,
+  BA_NONCENTRAL_CAMERA_RZ,
+  BA_NONCENTRAL_CAMERA_TX,
+  BA_NONCENTRAL_CAMERA_TY,
+  BA_NONCENTRAL_CAMERA_TZ,
+  BA_NONCENTRAL_CAMERA_NUM_POS_PARAMS
+};
+
+union BANoncentralCameraPosition {
+  struct S {
+  double rx;
+  double ry;
+  double rz;
+  double tx;
+  double ty;
+  double tz;
+  } s;
+  double a[BA_NONCENTRAL_CAMERA_NUM_POS_PARAMS];
+};
+
+struct BANoncentralCamera : public BACamera {
+  int num_cameras;
+  std::unique_ptr<std::unique_ptr<BACamera>[]> cameras;
+  std::unique_ptr<std::unique_ptr<BANoncentralCameraPosition>[]> pos_parameters;
+
+  BANoncentralCamera(int num_cameras_) :
+    cameras(std::unique_ptr<std::unique_ptr<BACamera>[]>(new std::unique_ptr<BACamera>[num_cameras_])),
+    pos_parameters(std::unique_ptr<std::unique_ptr<BANoncentralCameraPosition>[]>(
+      new std::unique_ptr<BANoncentralCameraPosition>[num_cameras_]))
+  {
+    num_cameras = num_cameras_;
+  }
+
+  BACameraType type() { return BA_NONCENTRAL_CAMERA; }
+};
+
+enum {
   BA_SHOT_RX,
   BA_SHOT_RY,
   BA_SHOT_RZ,
@@ -170,6 +209,7 @@ struct BAObservation {
   BACamera *camera;
   BAShot *shot;
   BAPoint *point;
+  int noncentral_index;
 };
 
 struct BARotationPrior {
@@ -294,6 +334,49 @@ struct PerspectiveReprojectionError {
   double observed_y_;
   double scale_;
 };
+
+struct NoncentralPerspectiveReprojectionError {
+  NoncentralPerspectiveReprojectionError(double observed_x, double observed_y, double std_deviation)
+      : observed_x_(observed_x)
+      , observed_y_(observed_y)
+      , scale_(1.0 / std_deviation)
+  {}
+
+  template <typename T>
+  bool operator()(const T* const camera,
+                  const T* const noncentral_rt,
+                  const T* const shot,
+                  const T* const point,
+                  T* residuals) const {
+    T noncentral_point[3];
+    WorldToCameraCoordinates(shot, point, noncentral_point);
+
+    T central_point[3];
+    ceres::AngleAxisRotatePoint(noncentral_rt + BA_NONCENTRAL_CAMERA_RX, noncentral_point, central_point);
+    central_point[0] += noncentral_rt[BA_NONCENTRAL_CAMERA_TX];
+    central_point[1] += noncentral_rt[BA_NONCENTRAL_CAMERA_TY];
+    central_point[2] += noncentral_rt[BA_NONCENTRAL_CAMERA_TZ];
+
+    if (central_point[2] <= T(0.0)) {
+      residuals[0] = residuals[1] = T(99.0);
+      return true;
+    }
+
+    T predicted[2];
+    PerspectiveProject(camera, central_point, predicted);
+
+    // The error is the difference between the predicted and observed position.
+    residuals[0] = T(scale_) * (predicted[0] - T(observed_x_));
+    residuals[1] = T(scale_) * (predicted[1] - T(observed_y_));
+
+    return true;
+  }
+
+  double observed_x_;
+  double observed_y_;
+  double scale_;
+};
+
 
 template <typename T>
 void BrownPerspectiveProject(const T* const camera,
@@ -797,7 +880,7 @@ ceres::LossFunction *CreateLossFunction(std::string name, double threshold) {
 }
 
 
-ceres::LinearSolverType LinearSolverTypeFromNamae(std::string name) {
+ceres::LinearSolverType LinearSolverTypeFromName(std::string name) {
   if (name.compare("DENSE_QR") == 0) {
     return ceres::DENSE_QR;
   } else if (name.compare("DENSE_NORMAL_CHOLESKY") == 0) {
@@ -865,6 +948,16 @@ class BundleAdjuster {
     return *(BAEquirectangularCamera *)cameras_[id].get();
   }
 
+  BAPerspectiveCamera GetNoncentralSubcamera(const std::string &id, int subcamera_index) {
+    BANoncentralCamera *nc = (BANoncentralCamera *) cameras_[id].get();
+    return *(BAPerspectiveCamera *) nc->cameras[subcamera_index].get();
+  }
+
+  BANoncentralCameraPosition::S GetNoncentralSubcameraPosition(const std::string &id, int subcamera_index) {
+    BANoncentralCamera *nc = (BANoncentralCamera *) cameras_[id].get();
+    return nc->pos_parameters[subcamera_index].get()->s;
+  }
+
   BAShot GetShot(const std::string &id) {
     return shots_[id];
   }
@@ -926,6 +1019,31 @@ class BundleAdjuster {
     c.id = id;
   }
 
+  void AddNoncentralCamera(const std::string &id, const int num_cameras) {
+    cameras_[id] = std::unique_ptr<BANoncentralCamera>(new BANoncentralCamera(num_cameras));
+    BANoncentralCamera &c = static_cast<BANoncentralCamera &>(*cameras_[id]);
+    c.id = id;
+  }
+
+  void MakeNoncentralSubcamera(
+      const std::string &subcamera_id,
+      const std::string &main_camera_id,
+      const int noncentral_index,
+      double rx,
+      double ry,
+      double rz,
+      double tx,
+      double ty,
+      double tz) {
+    BANoncentralCamera &nc = static_cast<BANoncentralCamera &>(*cameras_[main_camera_id]);
+    nc.cameras[noncentral_index] = std::move(cameras_[subcamera_id]);
+    cameras_.erase(subcamera_id);
+    if (noncentral_index == 0) {
+      assert(!(rx || ry || rz || tx || ty || tz));
+    }
+    nc.pos_parameters[noncentral_index] = std::unique_ptr<BANoncentralCameraPosition>(new BANoncentralCameraPosition { rx, ry, rz, tx, ty, tz });
+  }
+
   void AddShot(
       const std::string &id,
       const std::string &camera,
@@ -976,6 +1094,22 @@ class BundleAdjuster {
     o.point = &points_[point];
     o.coordinates[0] = x;
     o.coordinates[1] = y;
+    observations_.push_back(o);
+  }
+
+  void AddNoncentralObservation(
+      const std::string &shot,
+      const std::string &point,
+      int noncentral_index,
+      double x,
+      double y) {
+    BAObservation o;
+    o.shot = &shots_[shot];
+    o.camera = cameras_[o.shot->camera].get();
+    o.point = &points_[point];
+    o.coordinates[0] = x;
+    o.coordinates[1] = y;
+    o.noncentral_index = noncentral_index;
     observations_.push_back(o);
   }
 
@@ -1225,6 +1359,37 @@ class BundleAdjuster {
                                    observation.point->coordinates);
           break;
         }
+        case BA_NONCENTRAL_CAMERA:
+        {
+          BANoncentralCamera &nc = static_cast<BANoncentralCamera &>(*observation.camera);
+          BAPerspectiveCamera &c = static_cast<BAPerspectiveCamera &>(*nc.cameras[observation.noncentral_index]);
+
+          if (observation.noncentral_index == 0) {
+            ceres::CostFunction* cost_function =
+                new ceres::AutoDiffCostFunction<PerspectiveReprojectionError, 2, 3, 6, 3>(
+                    new PerspectiveReprojectionError(observation.coordinates[0],
+                                                     observation.coordinates[1],
+                                                     reprojection_error_sd_));
+            problem.AddResidualBlock(cost_function,
+                                     loss,
+                                     c.parameters,
+                                     observation.shot->parameters,
+                                     observation.point->coordinates);
+          } else {
+            ceres::CostFunction* cost_function =
+                new ceres::AutoDiffCostFunction<NoncentralPerspectiveReprojectionError, 2, 3, 6, 6, 3>(
+                    new NoncentralPerspectiveReprojectionError(observation.coordinates[0],
+                                                               observation.coordinates[1],
+                                                               reprojection_error_sd_));
+            problem.AddResidualBlock(cost_function,
+                                     loss,
+                                     c.parameters,
+                                     nc.pos_parameters[observation.noncentral_index].get()->a,
+                                     observation.shot->parameters,
+                                     observation.point->coordinates);
+          }
+          break;
+        }
       }
     }
 
@@ -1396,7 +1561,7 @@ class BundleAdjuster {
 
     // Solve
     ceres::Solver::Options options;
-    options.linear_solver_type = LinearSolverTypeFromNamae(linear_solver_type_);
+    options.linear_solver_type = LinearSolverTypeFromName(linear_solver_type_);
     options.num_threads = num_threads_;
     options.num_linear_solver_threads = num_threads_;
     options.max_num_iterations = max_num_iterations_;

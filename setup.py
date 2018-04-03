@@ -30,7 +30,7 @@ if sys.version_info >= (3, 0):
 subprocess.Popen(cmake_command, cwd='cmake_build').wait()
 
 print("Compiling extension...")
-subprocess.Popen(['make', '-j4'], cwd='cmake_build').wait()
+subprocess.Popen(['make', '-j4', 'csfm'], cwd='cmake_build').wait()
 
 print("Building package")
 setup(

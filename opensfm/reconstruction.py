@@ -1109,6 +1109,11 @@ def incremental_reconstruction(data):
     graph = data.load_tracks_graph()
     tracks, images = matching.tracks_and_images(graph)
     chrono.lap('load_tracks_graph')
+
+    image_groups = {}
+    for image in images:
+        prefix, suffix = image.split('_')
+        image_groups.setdefault(suffix, []).append(prefix)
     remaining_images = set(images)
     gcp = None
     if data.ground_control_points_exist():

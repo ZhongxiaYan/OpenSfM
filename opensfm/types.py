@@ -269,6 +269,33 @@ class PerspectiveCamera(Camera):
                          [0, f, 0.5 * (h - 1)],
                          [0, 0, 1.0]])
 
+class NoncentralCamera(Camera):
+    """
+    Using notation (viewpoint, bearing, etc) from https://laurentkneip.github.io/opengv/page_how_to_use.html
+    """
+    def __init__(self):
+        self.id = None
+        self.cameras = {} # maps subcamera id to subcamera object
+        # x = point from camera's view
+        # viewpoint coord = Rx + t
+        self.rotations = {} # rotation from camera reference frame to viewpoint reference frame
+        self.offsets = {} # translation from viewpoint to camera center
+
+    def __repr__(self):
+        return '{}({!r}, {!r})'.format(
+            self.__class__.__name__,
+            self.id)
+
+    def pixel_bearing_many(self, subcamera_id, pixels):
+        subcamera = self.cameras[subcamera_id]
+        points = pixels.reshape((-1, 1, 2)).astype(np.float64)
+        distortion = np.array([subcamera.k1, subcamera.k2, subcamera.p1, subcamera.p2, subcamera.k3])
+        up = cv2.undistortPoints(points, subcamera.get_K(), distortion)
+        up = up.reshape((-1, 2))
+        x = up[:, 0]
+        y = up[:, 1]
+        l = np.sqrt(x * x + y * y + 1.0)
+        return np.column_stack((x / l, y / l, 1.0 / l))
 
 class BrownPerspectiveCamera(Camera):
     """Define a perspective camera.
@@ -619,6 +646,11 @@ class Shot(object):
         """
         return self.pose.get_rotation_matrix().T.dot([0, 0, 1])
 
+class NoncentralShot(Shot):
+    def __init__(self, id_, noncentral_camera, shots):
+        self.id = id_
+        self.camera = noncentral_camera # must be instance of NoncentralCamera
+        self.camera_to_shots = { shot.camera.id : shot for shot in shots } # shots retain original camera id
 
 class Point(object):
     """Defines a 3D point.
